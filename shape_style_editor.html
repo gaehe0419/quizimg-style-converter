@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>도형 SVG 스타일 변환기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, sans-serif; font-size: 13px; background: #f5f5f5; height: 100vh; overflow: hidden; }
+
+    #app {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 12px;
+      padding: 12px;
+      height: 100vh;
+    }
+
+    /* 왼쪽 패널 */
+    #panel {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+    }
+
+    #panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #131313;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #f0f0f0;
+    }
+
+    .panel-section { display: flex; flex-direction: column; gap: 8px; }
+    .panel-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: #999;
+    }
+    .panel-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: #444;
+    }
+
+    /* 컬러 도트 */
+    .color-dots { display: flex; gap: 6px; }
+    .color-dot {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      cursor: pointer;
+      border: 2px solid transparent;
+      outline: 2px solid transparent;
+      outline-offset: 1px;
+      transition: outline-color .15s;
+      flex-shrink: 0;
+    }
+    .color-dot.selected { outline-color: #555; }
+    .color-dot:hover { opacity: .8; }
+
+    /* 드롭다운 */
+    select {
+      width: 100px;
+      font-size: 12px;
+      padding: 4px 6px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: #fff;
+      color: #333;
+    }
+
+    /* 버튼 */
+    #btn-apply {
+      padding: 9px;
+      background: #131313;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      width: 100%;
+      margin-top: 4px;
+    }
+    #btn-apply:hover { background: #333; }
+    #btn-apply:disabled { background: #ccc; cursor: default; }
+
+    #no-selection {
+      font-size: 12px;
+      color: #bbb;
+      text-align: center;
+      padding: 14px 0;
+      line-height: 1.6;
+    }
+
+    #style-options {
+      display: none;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* 오른쪽 뷰어 */
+    #viewer {
+      background: #fff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    .tabs { display: flex; gap: 6px; border-bottom: 1px solid #f0f0f0; padding-bottom: 8px; }
+    .tab {
+      font-size: 12px;
+      padding: 4px 14px;
+      border-radius: 5px;
+      border: none;
+      background: transparent;
+      color: #999;
+      cursor: pointer;
+    }
+    .tab.active { background: #f0f0f0; color: #131313; font-weight: 600; }
+
+    #svg-canvas {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fafafa;
+      border-radius: 6px;
+      overflow: auto;
+      min-height: 0;
+    }
+    #svg-canvas .placeholder {
+      color: #ccc;
+      font-size: 13px;
+      text-align: center;
+      line-height: 2;
+    }
+    #svg-canvas svg {
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    /* 클릭 가능 요소 */
+    #svg-canvas svg [data-sid] { cursor: pointer; }
+    #svg-canvas svg [data-sid]:hover { outline: 1.5px dashed #1b75bc; }
+    #svg-canvas svg [data-sid].selected-el { outline: 2px solid #1b75bc; }
+
+    /* 업로드 드롭존 */
+    #dropzone {
+      border: 2px dashed #ddd;
+      border-radius: 6px;
+      padding: 14px 10px;
+      text-align: center;
+      color: #bbb;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color .2s, color .2s;
+      line-height: 1.8;
+    }
+    #dropzone:hover, #dropzone.dragover { border-color: #1b75bc; color: #1b75bc; }
+    #dropzone .dz-icon { font-size: 20px; display: block; margin-bottom: 2px; }
+
+    /* 에러 */
+    #error-msg {
+      display: none;
+      font-size: 11px;
+      color: #be1e2d;
+      padding: 5px 8px;
+      background: #fff0f0;
+      border-radius: 4px;
+      line-height: 1.5;
+    }
+
+    /* 뷰어 하단 */
+    #viewer-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 4px;
+    }
+    #elem-info {
+      font-size: 11px;
+      color: #aaa;
+    }
+    #btn-download {
+      padding: 7px 16px;
+      background: transparent;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #444;
+    }
+    #btn-download:hover { border-color: #555; color: #131313; }
+    #btn-download:disabled { opacity: .4; cursor: default; }
+
+    /* color input */
+    input[type="color"] {
+      width: 36px; height: 24px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      cursor: pointer;
+      padding: 1px 2px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- 왼쪽 패널 -->
+  <aside id="panel">
+    <div id="panel-title">도형 SVG 스타일 변환기</div>
+
+    <!-- 업로드 -->
+    <div class="panel-section">
+      <span class="panel-label">SVG 업로드</span>
+      <div id="dropzone">
+        <span class="dz-icon">📂</span>
+        클릭하거나 SVG 파일을 드롭
+        <input type="file" id="file-input" accept=".svg,image/svg+xml" style="display:none">
+      </div>
+      <div id="error-msg"></div>
+    </div>
+
+    <!-- 선택 안내 -->
+    <div id="no-selection">SVG를 업로드한 뒤<br>요소를 클릭하면<br>스타일을 편집할 수 있습니다</div>
+
+    <!-- 스타일 옵션 -->
+    <div id="style-options">
+
+      <!-- 선 (outer/inner/right-angle) -->
+      <div class="panel-section" id="section-stroke" style="display:none;">
+        <span class="panel-label">선</span>
+        <div class="panel-row">
+          <span>색상</span>
+          <div class="color-dots" id="stroke-colors"></div>
+        </div>
+        <div class="panel-row">
+          <span>굵기</span>
+          <select id="stroke-width">
+            <option value="1">1px</option>
+            <option value="1.75">1.75px</option>
+            <option value="2">2px</option>
+            <option value="2.5">2.5px</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 점선 -->
+      <div class="panel-section" id="section-dashed" style="display:none;">
+        <span class="panel-label">점선</span>
+        <div class="panel-row">
+          <span>색상</span>
+          <div class="color-dots" id="dashed-colors"></div>
+        </div>
+        <div class="panel-row">
+          <span>굵기</span>
+          <select id="dashed-width">
+            <option value="1">1px</option>
+            <option value="1.5">1.5px</option>
+          </select>
+        </div>
+        <div class="panel-row">
+          <span>간격</span>
+          <select id="dashed-array">
+            <option value="3 2">3pt / 2pt</option>
+            <option value="5 5">5pt / 5pt</option>
+            <option value="4 3">4pt / 3pt</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 채우기 -->
+      <div class="panel-section" id="section-fill" style="display:none;">
+        <span class="panel-label">채우기</span>
+        <div class="panel-row">
+          <span>색상</span>
+          <input type="color" id="fill-color" value="#ffffff">
+        </div>
+      </div>
+
+      <!-- 텍스트 -->
+      <div class="panel-section" id="section-text" style="display:none;">
+        <span class="panel-label">텍스트</span>
+        <div class="panel-row">
+          <span>폰트</span>
+          <select id="text-font">
+            <option value="nanum">나눔명조 Bold</option>
+            <option value="times">Times NR Italic</option>
+          </select>
+        </div>
+        <div class="panel-row">
+          <span>크기</span>
+          <select id="text-size">
+            <option value="14">14px</option>
+            <option value="16">16px</option>
+            <option value="18">18px</option>
+            <option value="20">20px</option>
+          </select>
+        </div>
+        <div class="panel-row">
+          <span>색상</span>
+          <input type="color" id="text-color" value="#131313">
+        </div>
+      </div>
+
+    </div>
+
+    <button id="btn-apply" disabled>파운데이션 일괄 적용</button>
+  </aside>
+
+  <!-- 오른쪽 뷰어 -->
+  <main id="viewer">
+    <div class="tabs">
+      <button class="tab active" data-tab="converted">변환 결과</button>
+      <button class="tab" data-tab="original">원본</button>
+    </div>
+    <div id="svg-canvas">
+      <div class="placeholder">📐<br>SVG 파일을 업로드하세요</div>
+    </div>
+    <div id="viewer-footer">
+      <span id="elem-info"></span>
+      <button id="btn-download" disabled>SVG 다운로드</button>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── 상수 ────────────────────────────────────────────────────
+const FOUNDATION = {
+  strokeColors: ['#131313','#be1e2d','#1b75bc','#00a651','#f15a29'],
+  outerStrokeWidth: '1.75',
+  innerStrokeWidth: '1',
+  dashedColor: '#898989',
+  dashedWidth: '1',
+  dashedArray: '3 2',
+  fillColor: '#ffffff',
+  fontNormal: "'Nanum Myeongjo', serif",
+  fontFunction: "'Times New Roman', serif",
+  fontColor: '#131313',
+};
+
+// ── 상태 ────────────────────────────────────────────────────
+const AppState = {
+  svgDoc: null,
+  originalSvgText: '',
+  selectedSid: null,
+  elements: new Map(),  // sid → { el, type }
+  activeTab: 'converted',
+};
+
+// ── SVGParser ────────────────────────────────────────────────
+const SVGParser = {
+  parse(svgText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgText, 'image/svg+xml');
+    const err = doc.querySelector('parsererror');
+    if (err) throw new Error('SVG 파싱 오류');
+    return doc;
+  },
+
+  annotate(doc) {
+    AppState.elements.clear();
+    let counter = 0;
+    const targets = doc.querySelectorAll(
+      'path, line, polyline, polygon, rect, circle, ellipse, text'
+    );
+    targets.forEach(el => {
+      const sid = 'sid-' + (counter++);
+      el.setAttribute('data-sid', sid);
+      const type = SVGParser._classify(el);
+      AppState.elements.set(sid, { el, type });
+    });
+  },
+
+  _classify(el) {
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === 'text') return 'text';
+
+    // 점선 감지
+    const dashAttr = el.getAttribute('stroke-dasharray');
+    const dashStyle = (el.getAttribute('style') || '').includes('stroke-dasharray');
+    if (dashAttr || dashStyle) return 'dashed';
+
+    // 직각 기호: rect 중 width 또는 height ≤ 12
+    if (tag === 'rect') {
+      const w = parseFloat(el.getAttribute('width') || '999');
+      const h = parseFloat(el.getAttribute('height') || '999');
+      if (w <= 12 || h <= 12) return 'right-angle';
+    }
+
+    // 채우기 요소
+    const fill = el.getAttribute('fill') || '';
+    if (fill && fill !== 'none' && fill !== 'transparent') {
+      // circle/ellipse는 꼭짓점 마커로 자주 쓰임 → stroke 타입으로
+      if (tag === 'circle' || tag === 'ellipse') return 'inner-stroke';
+      return 'fill';
+    }
+
+    // 바깥쪽 선
+    if (tag === 'polygon' || tag === 'polyline' || tag === 'rect') return 'outer-stroke';
+
+    return 'inner-stroke';
+  },
+};
+
+// ── StyleManager ─────────────────────────────────────────────
+const StyleManager = {
+  applyFoundation() {
+    AppState.elements.forEach(({ el, type }) => {
+      switch (type) {
+        case 'outer-stroke':
+          el.setAttribute('stroke', FOUNDATION.strokeColors[0]);
+          el.setAttribute('stroke-width', FOUNDATION.outerStrokeWidth);
+          el.removeAttribute('stroke-dasharray');
+          break;
+        case 'inner-stroke':
+        case 'right-angle':
+          el.setAttribute('stroke', FOUNDATION.strokeColors[0]);
+          el.setAttribute('stroke-width', FOUNDATION.innerStrokeWidth);
+          el.removeAttribute('stroke-dasharray');
+          break;
+        case 'dashed':
+          el.setAttribute('stroke', FOUNDATION.dashedColor);
+          el.setAttribute('stroke-width', FOUNDATION.dashedWidth);
+          el.setAttribute('stroke-dasharray', FOUNDATION.dashedArray);
+          break;
+        case 'fill':
+          el.setAttribute('fill', FOUNDATION.fillColor);
+          break;
+        case 'text':
+          el.setAttribute('font-family', FOUNDATION.fontNormal);
+          el.setAttribute('font-weight', '700');
+          el.setAttribute('font-style', 'normal');
+          el.setAttribute('fill', FOUNDATION.fontColor);
+          break;
+      }
+    });
+  },
+
+  read(sid) {
+    const { el, type } = AppState.elements.get(sid);
+    return {
+      type,
+      stroke: el.getAttribute('stroke') || '',
+      strokeWidth: el.getAttribute('stroke-width') || '',
+      strokeDasharray: el.getAttribute('stroke-dasharray') || '',
+      fill: el.getAttribute('fill') || '',
+      fontFamily: el.getAttribute('font-family') || '',
+      fontSize: el.getAttribute('font-size') || '16',
+      fontColor: el.getAttribute('fill') || FOUNDATION.fontColor,
+    };
+  },
+
+  write(sid, props) {
+    const { el } = AppState.elements.get(sid);
+    if (props.stroke !== undefined) el.setAttribute('stroke', props.stroke);
+    if (props.strokeWidth !== undefined) el.setAttribute('stroke-width', props.strokeWidth);
+    if (props.strokeDasharray !== undefined) el.setAttribute('stroke-dasharray', props.strokeDasharray);
+    if (props.fill !== undefined) el.setAttribute('fill', props.fill);
+    if (props.fontFamily !== undefined) el.setAttribute('font-family', props.fontFamily);
+    if (props.fontStyle !== undefined) el.setAttribute('font-style', props.fontStyle);
+    if (props.fontWeight !== undefined) el.setAttribute('font-weight', props.fontWeight);
+    if (props.fontSize !== undefined) el.setAttribute('font-size', props.fontSize);
+    if (props.fontColor !== undefined) el.setAttribute('fill', props.fontColor);
+  },
+};
+
+// ── Exporter ─────────────────────────────────────────────────
+const Exporter = {
+  download() {
+    if (!AppState.svgDoc) return;
+    const serializer = new XMLSerializer();
+    let svgStr = serializer.serializeToString(AppState.svgDoc.documentElement);
+    svgStr = svgStr.replace(/ data-sid="[^"]*"/g, '');
+    const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'converted.svg';
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+};
+
+// ── UIController ──────────────────────────────────────────────
+const UIController = {
+  init() {
+    const dz = document.getElementById('dropzone');
+    const fi = document.getElementById('file-input');
+
+    dz.addEventListener('click', () => fi.click());
+    fi.addEventListener('change', e => {
+      if (e.target.files[0]) UIController.loadFile(e.target.files[0]);
+    });
+    dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+    dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+    dz.addEventListener('drop', e => {
+      e.preventDefault();
+      dz.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) UIController.loadFile(e.dataTransfer.files[0]);
+    });
+
+    document.querySelectorAll('.tab').forEach(btn => {
+      btn.addEventListener('click', () => UIController.switchTab(btn.dataset.tab));
+    });
+
+    document.getElementById('btn-apply').addEventListener('click', () => {
+      if (!AppState.svgDoc) return;
+      StyleManager.applyFoundation();
+      UIController.renderSVG();
+      UIController.selectElement(null);
+    });
+
+    document.getElementById('btn-download').addEventListener('click', Exporter.download);
+  },
+
+  loadFile(file) {
+    UIController.showError('');
+    if (!file.name.toLowerCase().endsWith('.svg') && file.type !== 'image/svg+xml') {
+      UIController.showError('SVG 파일만 업로드할 수 있습니다.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        AppState.originalSvgText = e.target.result;
+        AppState.svgDoc = SVGParser.parse(AppState.originalSvgText);
+
+        const targets = AppState.svgDoc.querySelectorAll(
+          'path, line, polyline, polygon, rect, circle, ellipse, text'
+        );
+        if (targets.length === 0) {
+          UIController.showError('요소를 찾을 수 없습니다.');
+          return;
+        }
+
+        SVGParser.annotate(AppState.svgDoc);
+        StyleManager.applyFoundation();
+        UIController.renderSVG();
+
+        document.getElementById('btn-apply').disabled = false;
+        document.getElementById('btn-download').disabled = false;
+        document.getElementById('dropzone').style.borderColor = '#00a651';
+      } catch (err) {
+        UIController.showError('SVG를 읽을 수 없습니다: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  },
+
+  renderSVG() {
+    const canvas = document.getElementById('svg-canvas');
+
+    if (AppState.activeTab === 'original') {
+      canvas.innerHTML = AppState.originalSvgText;
+      return;
+    }
+
+    const serializer = new XMLSerializer();
+    const svgStr = serializer.serializeToString(AppState.svgDoc.documentElement);
+    canvas.innerHTML = svgStr;
+
+    // 클릭 이벤트 연결
+    canvas.querySelectorAll('[data-sid]').forEach(el => {
+      el.addEventListener('click', e => {
+        e.stopPropagation();
+        UIController.selectElement(el.getAttribute('data-sid'));
+      });
+    });
+
+    canvas.addEventListener('click', () => UIController.selectElement(null));
+
+    // 선택 상태 복원
+    if (AppState.selectedSid) {
+      const el = canvas.querySelector(`[data-sid="${AppState.selectedSid}"]`);
+      if (el) el.classList.add('selected-el');
+    }
+  },
+
+  switchTab(tab) {
+    AppState.activeTab = tab;
+    document.querySelectorAll('.tab').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tab);
+    });
+    if (AppState.svgDoc) UIController.renderSVG();
+  },
+
+  selectElement(sid) {
+    document.querySelectorAll('[data-sid].selected-el').forEach(el => {
+      el.classList.remove('selected-el');
+    });
+
+    AppState.selectedSid = sid;
+
+    if (!sid) {
+      UIController.showStylePanel(false);
+      document.getElementById('elem-info').textContent = '';
+      return;
+    }
+
+    const domEl = document.querySelector(`[data-sid="${sid}"]`);
+    if (domEl) domEl.classList.add('selected-el');
+
+    const { type } = AppState.elements.get(sid);
+    const typeLabel = {
+      'outer-stroke': '바깥쪽 선',
+      'inner-stroke': '안쪽 선',
+      'dashed': '점선',
+      'right-angle': '직각 기호',
+      'fill': '채우기',
+      'text': '텍스트',
+    }[type] || type;
+
+    document.getElementById('elem-info').textContent = `선택: ${typeLabel} (${sid})`;
+    UIController.showStylePanel(true);
+    UIController.populatePanel(sid);
+  },
+
+  showStylePanel(show) {
+    document.getElementById('no-selection').style.display = show ? 'none' : 'block';
+    document.getElementById('style-options').style.display = show ? 'flex' : 'none';
+  },
+
+  showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.style.display = msg ? 'block' : 'none';
+    el.textContent = msg;
+  },
+
+  _initColorDots(containerId, colors, currentColor, onSelect) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    colors.forEach(color => {
+      const dot = document.createElement('div');
+      dot.className = 'color-dot';
+      dot.style.background = color;
+      dot.dataset.color = color;
+      dot.title = color;
+      if (color.toLowerCase() === (currentColor || '').toLowerCase()) {
+        dot.classList.add('selected');
+      }
+      dot.addEventListener('click', () => {
+        container.querySelectorAll('.color-dot').forEach(d => d.classList.remove('selected'));
+        dot.classList.add('selected');
+        onSelect(color);
+      });
+      container.appendChild(dot);
+    });
+  },
+
+  populatePanel(sid) {
+    const styles = StyleManager.read(sid);
+    const { type } = AppState.elements.get(sid);
+
+    // 섹션 표시/숨김
+    const isStroke = ['outer-stroke','inner-stroke','right-angle'].includes(type);
+    document.getElementById('section-stroke').style.display = isStroke ? 'flex' : 'none';
+    document.getElementById('section-dashed').style.display = type === 'dashed' ? 'flex' : 'none';
+    document.getElementById('section-fill').style.display = type === 'fill' ? 'flex' : 'none';
+    document.getElementById('section-text').style.display = type === 'text' ? 'flex' : 'none';
+
+    if (isStroke) {
+      UIController._initColorDots('stroke-colors', FOUNDATION.strokeColors, styles.stroke, color => {
+        StyleManager.write(sid, { stroke: color });
+        UIController.renderSVG();
+      });
+      const sw = document.getElementById('stroke-width');
+      sw.value = styles.strokeWidth || FOUNDATION.outerStrokeWidth;
+      sw.onchange = () => {
+        StyleManager.write(sid, { strokeWidth: sw.value });
+        UIController.renderSVG();
+      };
+    }
+
+    if (type === 'dashed') {
+      UIController._initColorDots('dashed-colors', FOUNDATION.strokeColors, styles.stroke, color => {
+        StyleManager.write(sid, { stroke: color });
+        UIController.renderSVG();
+      });
+      const dw = document.getElementById('dashed-width');
+      dw.value = styles.strokeWidth || FOUNDATION.dashedWidth;
+      dw.onchange = () => {
+        StyleManager.write(sid, { strokeWidth: dw.value });
+        UIController.renderSVG();
+      };
+      const da = document.getElementById('dashed-array');
+      da.value = styles.strokeDasharray || FOUNDATION.dashedArray;
+      da.onchange = () => {
+        StyleManager.write(sid, { strokeDasharray: da.value });
+        UIController.renderSVG();
+      };
+    }
+
+    if (type === 'fill') {
+      const fc = document.getElementById('fill-color');
+      fc.value = UIController._toHex(styles.fill) || FOUNDATION.fillColor;
+      fc.oninput = () => {
+        StyleManager.write(sid, { fill: fc.value });
+        UIController.renderSVG();
+      };
+    }
+
+    if (type === 'text') {
+      const isItalic = (styles.fontFamily || '').toLowerCase().includes('times');
+      const fontSel = document.getElementById('text-font');
+      fontSel.value = isItalic ? 'times' : 'nanum';
+      fontSel.onchange = () => {
+        const isT = fontSel.value === 'times';
+        StyleManager.write(sid, {
+          fontFamily: isT ? FOUNDATION.fontFunction : FOUNDATION.fontNormal,
+          fontStyle: isT ? 'italic' : 'normal',
+          fontWeight: isT ? 'normal' : '700',
+        });
+        UIController.renderSVG();
+      };
+
+      const sizeSel = document.getElementById('text-size');
+      sizeSel.value = styles.fontSize || '16';
+      sizeSel.onchange = () => {
+        StyleManager.write(sid, { fontSize: sizeSel.value });
+        UIController.renderSVG();
+      };
+
+      const colorInput = document.getElementById('text-color');
+      colorInput.value = UIController._toHex(styles.fontColor) || FOUNDATION.fontColor;
+      colorInput.oninput = () => {
+        StyleManager.write(sid, { fontColor: colorInput.value });
+        UIController.renderSVG();
+      };
+    }
+  },
+
+  // named color → hex 변환 (color input은 hex만 받음)
+  _toHex(color) {
+    if (!color) return '#000000';
+    if (color.startsWith('#')) return color;
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.fillStyle = color;
+    return ctx.fillStyle;
+  },
+};
+
+// ── 초기화 ────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => UIController.init());
+</script>
+</body>
+</html>
