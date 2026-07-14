@@ -362,6 +362,15 @@
             <option value="4 3">4pt / 3pt</option>
           </select>
         </div>
+        <!-- 아치 편집 (path 요소일 때만 표시) -->
+        <div id="section-arch" style="display:none; flex-direction:column; gap:6px;">
+          <div class="panel-row">
+            <span>아치 높이</span>
+            <span id="arch-val-display" style="font-size:11px; color:#555; min-width:28px; text-align:right;">20</span>
+          </div>
+          <input type="range" id="arch-slider" min="-80" max="80" value="20" step="1" style="width:100%; accent-color:#1b75bc;">
+          <span style="font-size:10px; color:#999;">음수(-): 반대 방향으로 휨</span>
+        </div>
       </div>
 
       <!-- 채우기 -->
@@ -401,6 +410,22 @@
     </div>
 
     <button id="btn-apply" disabled>파운데이션 일괄 적용</button>
+
+    <!-- 출력 사이즈 -->
+    <div class="panel-section" id="section-size">
+      <span class="panel-label">출력 크기</span>
+      <div class="panel-row">
+        <span>폭 (px)</span>
+        <input type="number" id="out-width" value="400" min="50" max="2000" step="1"
+          style="width:80px; padding:4px 6px; border:1px solid #ddd; border-radius:4px; font-size:12px;">
+      </div>
+      <div class="panel-row">
+        <span>높이 (px)</span>
+        <input type="number" id="out-height" value="" min="50" max="2000" step="1" placeholder="자동"
+          style="width:80px; padding:4px 6px; border:1px solid #ddd; border-radius:4px; font-size:12px; color:#888;">
+      </div>
+      <div style="font-size:10px; color:#aaa;">높이 비워두면 비율 유지</div>
+    </div>
 
     <!-- 치수선 도구 -->
     <button id="btn-dimtool" disabled>📐 치수선 추가</button>
@@ -546,11 +571,15 @@ const StyleManager = {
           el.setAttribute('stroke-width', FOUNDATION.innerStrokeWidth);
           el.removeAttribute('stroke-dasharray');
           break;
-        case 'dashed':
-          el.setAttribute('stroke', FOUNDATION.dashedColor);
+        case 'dashed': {
+          // 색상: 원본이 검정/미설정이면 기본값, 그 외 의미있는 색상은 유지
+          const s = (el.getAttribute('stroke') || '').toLowerCase();
+          const isNeutral = !s || s === 'none' || s === 'black' || s === '#000000' || s === '#131313' || s === 'gray' || s === 'grey';
+          if (isNeutral) el.setAttribute('stroke', FOUNDATION.dashedColor);
           el.setAttribute('stroke-width', FOUNDATION.dashedWidth);
           el.setAttribute('stroke-dasharray', FOUNDATION.dashedArray);
           break;
+        }
         case 'fill':
           el.setAttribute('fill', FOUNDATION.fillColor);
           break;
@@ -596,9 +625,27 @@ const StyleManager = {
 const Exporter = {
   download() {
     if (!AppState.svgDoc) return;
+
+    const svgEl = AppState.svgDoc.documentElement;
+    const origW = parseFloat(svgEl.getAttribute('width') || svgEl.viewBox?.baseVal?.width || 600);
+    const origH = parseFloat(svgEl.getAttribute('height') || svgEl.viewBox?.baseVal?.height || 400);
+
+    const outW = parseFloat(document.getElementById('out-width').value) || 400;
+    const outHInput = document.getElementById('out-height').value;
+    const outH = outHInput ? parseFloat(outHInput) : Math.round(origH * (outW / origW));
+
+    // viewBox 없으면 추가
+    if (!svgEl.getAttribute('viewBox')) {
+      svgEl.setAttribute('viewBox', `0 0 ${origW} ${origH}`);
+    }
+    svgEl.setAttribute('width', outW);
+    svgEl.setAttribute('height', outH);
+
     const serializer = new XMLSerializer();
-    let svgStr = serializer.serializeToString(AppState.svgDoc.documentElement);
+    let svgStr = serializer.serializeToString(svgEl);
     svgStr = svgStr.replace(/ data-sid="[^"]*"/g, '');
+    svgStr = svgStr.replace(/ data-arch="[^"]*"/g, '');
+
     const blob = new Blob([svgStr], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -817,6 +864,35 @@ const UIController = {
         StyleManager.write(sid, { strokeDasharray: da.value });
         UIController.renderSVG();
       };
+
+      // 아치 편집: path 요소이고 곡선(C 명령)이 있을 때만 표시
+      const { el: dEl } = AppState.elements.get(sid);
+      const dTag = dEl.tagName.toLowerCase();
+      const dAttr = dEl.getAttribute('d') || '';
+      const archSection = document.getElementById('section-arch');
+      if (dTag === 'path' && dAttr.toUpperCase().includes('C')) {
+        archSection.style.display = 'flex';
+        const endpoints = UIController._parsePathEndpoints(dAttr);
+        const currentArch = parseFloat(dEl.getAttribute('data-arch') || '20');
+        const slider = document.getElementById('arch-slider');
+        const archDisplay = document.getElementById('arch-val-display');
+        slider.value = currentArch;
+        archDisplay.textContent = currentArch;
+
+        slider.oninput = () => {
+          archDisplay.textContent = slider.value;
+          if (!endpoints) return;
+          const archVal = parseFloat(slider.value);
+          const newD = UIController._regenArchPath(endpoints, archVal, dAttr);
+          if (newD) {
+            dEl.setAttribute('d', newD);
+            dEl.setAttribute('data-arch', archVal);
+            UIController.renderSVG();
+          }
+        };
+      } else {
+        archSection.style.display = 'none';
+      }
     }
 
     if (type === 'fill') {
@@ -855,6 +931,67 @@ const UIController = {
         StyleManager.write(sid, { fontColor: colorInput.value });
         UIController.renderSVG();
       };
+    }
+  },
+
+  // path d 속성에서 시작점·끝점 추출
+  _parsePathEndpoints(d) {
+    try {
+      const mMatch = d.match(/M\s*([-\d.]+)[,\s]+([-\d.]+)/i);
+      if (!mMatch) return null;
+      const start = { x: parseFloat(mMatch[1]), y: parseFloat(mMatch[2]) };
+      // C 명령의 마지막 끝점 추출
+      const cMatches = [...d.matchAll(/C\s*[-\d.]+[,\s]+[-\d.]+[,\s]+[-\d.]+[,\s]+[-\d.]+[,\s]+([-\d.]+)[,\s]+([-\d.]+)/gi)];
+      if (cMatches.length > 0) {
+        const last = cMatches[cMatches.length - 1];
+        return { start, end: { x: parseFloat(last[1]), y: parseFloat(last[2]) } };
+      }
+      return null;
+    } catch(e) { return null; }
+  },
+
+  // 시작점·끝점 + 아치값으로 path d 재생성 (단일 곡선 세그먼트)
+  _regenArchPath(endpoints, offset, origD) {
+    const { start: p1, end: p2 } = endpoints;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    if (len < 1) return null;
+
+    const nx = -dy / len, ny = dx / len;
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    const cpx = mx + nx * offset, cpy = my + ny * offset;
+
+    // origD에서 텍스트 gap 여부 판단 (gap이 있으면 절반 세그먼트로 재생성)
+    const cCount = (origD.match(/C/gi) || []).length;
+
+    function fmt(n) { return Math.round(n * 100) / 100; }
+    function lerp(a, b, t) { return { x: a.x+t*(b.x-a.x), y: a.y+t*(b.y-a.y) }; }
+
+    const P0 = p1, CP = { x: cpx, y: cpy }, P2 = p2;
+
+    if (cCount === 1) {
+      // 단순 곡선: 전체를 하나의 cubic으로
+      // 2차 → cubic 변환: C1 = P0 + 2/3*(CP-P0), C2 = P2 + 2/3*(CP-P2)
+      const c1 = { x: P0.x + 2/3*(CP.x-P0.x), y: P0.y + 2/3*(CP.y-P0.y) };
+      const c2 = { x: P2.x + 2/3*(CP.x-P2.x), y: P2.y + 2/3*(CP.y-P2.y) };
+      return `M ${fmt(P0.x)},${fmt(P0.y)} C ${fmt(c1.x)},${fmt(c1.y)} ${fmt(c2.x)},${fmt(c2.y)} ${fmt(P2.x)},${fmt(P2.y)}`;
+    } else {
+      // 치수선 세그먼트 (gap 있는 경우) - 현재 path가 전체의 절반
+      // 시작점~끝점 기준으로 t 범위 추정: 절반 세그먼트는 t=0~0.45 또는 t=0.55~1
+      // 전체 시작(p1)과 현재 시작을 비교해서 어느 쪽 세그먼트인지 판단
+      const fullMid = { x: mx, y: my };
+      const distToMid = Math.sqrt((p1.x-fullMid.x)**2 + (p1.y-fullMid.y)**2);
+      const distP1toP2 = len;
+      const isFirstHalf = distToMid > distP1toP2 * 0.2;
+
+      // de Casteljau로 t1에서 분할한 왼쪽 세그먼트 재생성
+      const t1 = 0.45;
+      const A1 = lerp(P0, CP, t1);
+      const B1 = lerp(CP, P2, t1);
+      const C1 = lerp(A1, B1, t1);
+      const c1 = { x: P0.x + 2/3*(CP.x-P0.x), y: P0.y + 2/3*(CP.y-P0.y) };
+      const c2 = { x: P2.x + 2/3*(CP.x-P2.x), y: P2.y + 2/3*(CP.y-P2.y) };
+      return `M ${fmt(P0.x)},${fmt(P0.y)} C ${fmt(c1.x)},${fmt(c1.y)} ${fmt(c2.x)},${fmt(c2.y)} ${fmt(P2.x)},${fmt(P2.y)}`;
     }
   },
 
@@ -1096,6 +1233,7 @@ const DimensionTool = {
       path.setAttribute('stroke-dasharray', '3 2');
       path.setAttribute('fill', 'none');
       path.setAttribute('stroke-linecap', 'butt');
+      path.setAttribute('data-arch', offset);
       if (isPreview) path.setAttribute('opacity', '0.7');
       return path;
     }
