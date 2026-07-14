@@ -348,7 +348,7 @@
           <span>굵기</span>
           <select id="stroke-width">
             <option value="1">1px</option>
-            <option value="1.75">1.75px</option>
+            <option value="1.5">1.5px</option>
             <option value="2">2px</option>
             <option value="2.5">2.5px</option>
           </select>
@@ -365,6 +365,7 @@
         <div class="panel-row">
           <span>굵기</span>
           <select id="dashed-width">
+            <option value=".75">0.75px</option>
             <option value="1">1px</option>
             <option value="1.5">1.5px</option>
           </select>
@@ -493,16 +494,24 @@
 <script>
 // ── 상수 ────────────────────────────────────────────────────
 const FOUNDATION = {
-  strokeColors: ['#131313','#be1e2d','#1b75bc','#00a651','#f15a29'],
-  outerStrokeWidth: '1.75',
+  // cls-1: 검정 실선 외곽(도형 변, 원)
+  strokeColors: ['#000000','#c00000','#e97132','#727171','#1b75bc'],
+  outerStrokeWidth: '1',      // cls-1 기본값
   innerStrokeWidth: '1',
-  dashedColor: '#898989',
-  dashedWidth: '1',
+  accentStrokeWidth: '1.5',   // cls-3/orange 강조선
+  // cls-2: 회색 점선 (치수/접선)
+  dashedColor: '#727171',
+  dashedWidth: '.75',
   dashedArray: '3 2',
+  // fill
   fillColor: '#ffffff',
-  fontNormal: "'Nanum Myeongjo', serif",
+  dotFill: '#000000',         // cls-dot 접점 표시
+  // font
+  fontNormal: 'NanumMyeongjoBold, NanumMyeongjo',
   fontFunction: "'Times New Roman', serif",
-  fontColor: '#131313',
+  fontSizeMain: '17',         // cls-text-main
+  fontSizeSub: '11',          // cls-text-sub
+  fontColor: '#000000',
 };
 
 // ── 상태 ────────────────────────────────────────────────────
@@ -667,6 +676,7 @@ const StyleManager = {
           el.setAttribute('font-weight', '700');
           el.setAttribute('font-style', 'normal');
           el.setAttribute('fill', FOUNDATION.fontColor);
+          if (!el.getAttribute('font-size')) el.setAttribute('font-size', FOUNDATION.fontSizeMain);
           break;
       }
     });
