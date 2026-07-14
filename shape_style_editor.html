@@ -322,6 +322,21 @@
     <!-- 스타일 옵션 -->
     <div id="style-options">
 
+      <!-- 타입 변경 -->
+      <div class="panel-section" id="section-type">
+        <span class="panel-label">타입</span>
+        <div class="panel-row">
+          <select id="elem-type-sel" style="width:100%;">
+            <option value="outer-stroke">바깥쪽 선</option>
+            <option value="inner-stroke">안쪽 선</option>
+            <option value="dashed">점선 (치수선)</option>
+            <option value="right-angle">직각 기호</option>
+            <option value="fill">채우기</option>
+            <option value="text">텍스트</option>
+          </select>
+        </div>
+      </div>
+
       <!-- 선 (outer/inner/right-angle) -->
       <div class="panel-section" id="section-stroke" style="display:none;">
         <span class="panel-label">선</span>
@@ -511,6 +526,7 @@ const SVGParser = {
 
   annotate(doc) {
     AppState.elements.clear();
+    const styleMap = SVGParser._buildStyleMap(doc);
     let counter = 0;
     const targets = doc.querySelectorAll(
       'path, line, polyline, polygon, rect, circle, ellipse, text'
@@ -518,9 +534,66 @@ const SVGParser = {
     targets.forEach(el => {
       const sid = 'sid-' + (counter++);
       el.setAttribute('data-sid', sid);
+      SVGParser._inlineComputedStyles(el, styleMap);
       const type = SVGParser._classify(el);
       AppState.elements.set(sid, { el, type });
     });
+  },
+
+  _buildStyleMap(doc) {
+    const map = {};
+    doc.querySelectorAll('style').forEach(styleEl => {
+      const text = styleEl.textContent || '';
+      const ruleRegex = /([^{]+)\{([^}]*)\}/g;
+      let m;
+      while ((m = ruleRegex.exec(text)) !== null) {
+        const selectors = m[1];
+        const decls = m[2];
+        const props = {};
+        decls.split(';').forEach(d => {
+          const ci = d.indexOf(':');
+          if (ci < 0) return;
+          const prop = d.slice(0, ci).trim();
+          const val = d.slice(ci + 1).trim();
+          if (prop) props[prop] = val;
+        });
+        selectors.split(',').forEach(sel => {
+          const cn = sel.trim().match(/\.([^\s.:#[\]]+)/);
+          if (cn) {
+            if (!map[cn[1]]) map[cn[1]] = {};
+            Object.assign(map[cn[1]], props);
+          }
+        });
+      }
+    });
+    return map;
+  },
+
+  _inlineComputedStyles(el, styleMap) {
+    const classes = (el.getAttribute('class') || '').split(/\s+/).filter(Boolean);
+    if (!classes.length) return;
+    const computed = {};
+    classes.forEach(cls => {
+      if (styleMap[cls]) Object.assign(computed, styleMap[cls]);
+    });
+    // CSS 'style' attribute overrides class styles
+    const inlineStyle = el.getAttribute('style') || '';
+    inlineStyle.split(';').forEach(d => {
+      const ci = d.indexOf(':');
+      if (ci < 0) return;
+      const prop = d.slice(0, ci).trim();
+      const val = d.slice(ci + 1).trim();
+      if (prop) computed[prop] = val;
+    });
+    // SVG presentation attributes (kebab → as-is) — only set if not already inline
+    const presentationProps = ['fill','stroke','stroke-width','stroke-dasharray','stroke-miterlimit','stroke-linecap','font-family','font-size','font-weight','font-style'];
+    presentationProps.forEach(prop => {
+      if (computed[prop] && !el.getAttribute(prop)) {
+        el.setAttribute(prop, computed[prop]);
+      }
+    });
+    el.removeAttribute('class');
+    el.removeAttribute('style');
   },
 
   _classify(el) {
@@ -528,10 +601,9 @@ const SVGParser = {
 
     if (tag === 'text') return 'text';
 
-    // 점선 감지
+    // 점선 감지 (인라인 속성으로 이미 resolve됨)
     const dashAttr = el.getAttribute('stroke-dasharray');
-    const dashStyle = (el.getAttribute('style') || '').includes('stroke-dasharray');
-    if (dashAttr || dashStyle) return 'dashed';
+    if (dashAttr) return 'dashed';
 
     // 직각 기호: rect 중 width 또는 height ≤ 12
     if (tag === 'rect') {
@@ -572,9 +644,10 @@ const StyleManager = {
           el.removeAttribute('stroke-dasharray');
           break;
         case 'dashed': {
-          // 색상: 원본이 검정/미설정이면 기본값, 그 외 의미있는 색상은 유지
           const s = (el.getAttribute('stroke') || '').toLowerCase();
-          const isNeutral = !s || s === 'none' || s === 'black' || s === '#000000' || s === '#131313' || s === 'gray' || s === 'grey';
+          const isNeutral = !s || s === 'none' || s === 'black' || s === '#000000'
+            || s === '#131313' || s === 'gray' || s === 'grey'
+            || StyleManager._isGrayHex(s);
           if (isNeutral) el.setAttribute('stroke', FOUNDATION.dashedColor);
           el.setAttribute('stroke-width', FOUNDATION.dashedWidth);
           el.setAttribute('stroke-dasharray', FOUNDATION.dashedArray);
@@ -582,6 +655,12 @@ const StyleManager = {
         }
         case 'fill':
           el.setAttribute('fill', FOUNDATION.fillColor);
+          // 테두리 선도 함께 적용
+          if (el.getAttribute('stroke') && el.getAttribute('stroke') !== 'none') {
+            el.setAttribute('stroke', FOUNDATION.strokeColors[0]);
+            el.setAttribute('stroke-width', FOUNDATION.innerStrokeWidth);
+            el.removeAttribute('stroke-dasharray');
+          }
           break;
         case 'text':
           el.setAttribute('font-family', FOUNDATION.fontNormal);
@@ -591,6 +670,15 @@ const StyleManager = {
           break;
       }
     });
+  },
+
+  _isGrayHex(hex) {
+    // #rrggbb 형식에서 R≈G≈B이면 gray로 판단
+    const m = hex.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    if (!m) return false;
+    const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    return (max - min) < 30; // 채도 낮으면 gray
   },
 
   read(sid) {
@@ -825,7 +913,23 @@ const UIController = {
 
   populatePanel(sid) {
     const styles = StyleManager.read(sid);
-    const { type } = AppState.elements.get(sid);
+    const entry = AppState.elements.get(sid);
+    const { type } = entry;
+
+    // 타입 셀렉터 설정
+    const typeSel = document.getElementById('elem-type-sel');
+    typeSel.value = type;
+    typeSel.onchange = () => {
+      entry.type = typeSel.value;
+      // 새 타입으로 파운데이션 재적용
+      const tempMap = new Map([[sid, entry]]);
+      const origElements = AppState.elements;
+      AppState.elements = tempMap;
+      StyleManager.applyFoundation();
+      AppState.elements = origElements;
+      UIController.renderSVG();
+      UIController.populatePanel(sid);
+    };
 
     // 섹션 표시/숨김
     const isStroke = ['outer-stroke','inner-stroke','right-angle'].includes(type);
