@@ -217,6 +217,86 @@
       padding: 1px 2px;
       background: #fff;
     }
+
+    /* 치수선 도구 */
+    #btn-dimtool {
+      padding: 8px;
+      background: transparent;
+      color: #444;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      width: 100%;
+      text-align: center;
+    }
+    #btn-dimtool:hover { border-color: #888; color: #131313; }
+    #btn-dimtool.active { background: #1b75bc; color: #fff; border-color: #1b75bc; }
+
+    #dim-panel {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      padding: 10px;
+      background: #f0f6ff;
+      border: 1px solid #c5dcf5;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    #dim-panel .dim-step {
+      font-size: 11px;
+      color: #1b75bc;
+      font-weight: 600;
+    }
+    #dim-panel input[type="text"] {
+      width: 100%;
+      padding: 5px 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: 'Nanum Myeongjo', serif;
+      font-weight: 700;
+    }
+    #dim-arch-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    #dim-arch-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #dim-arch { width: 100%; accent-color: #1b75bc; }
+    #dim-arch-val {
+      font-size: 11px;
+      color: #555;
+      min-width: 36px;
+      text-align: right;
+    }
+    #dim-arch-hint {
+      font-size: 10px;
+      color: #999;
+    }
+    .dim-btns { display: flex; gap: 6px; }
+    .dim-btns button {
+      flex: 1;
+      padding: 7px;
+      border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      background: #fff;
+    }
+    #dim-confirm { background: #131313 !important; color: #fff !important; border-color: #131313 !important; }
+    #dim-confirm:disabled { background: #ccc !important; border-color: #ccc !important; cursor: default; }
+
+    /* 치수선 모드 커서 */
+    #svg-canvas.dim-mode { cursor: crosshair; }
+    #svg-canvas.dim-mode svg [data-sid] { cursor: crosshair; }
+
+    /* 클릭 마커 */
+    .dim-marker { pointer-events: none; }
   </style>
 </head>
 <body>
@@ -321,6 +401,37 @@
     </div>
 
     <button id="btn-apply" disabled>파운데이션 일괄 적용</button>
+
+    <!-- 치수선 도구 -->
+    <button id="btn-dimtool" disabled>📐 치수선 추가</button>
+
+    <div id="dim-panel">
+      <div class="dim-step" id="dim-step-msg">1단계: 시작점을 클릭하세요</div>
+
+      <div class="panel-section">
+        <span class="panel-label">레이블</span>
+        <input type="text" id="dim-label" placeholder="예: 3, 5, x+1" value="">
+      </div>
+
+      <div class="panel-section">
+        <span class="panel-label">선 색상</span>
+        <div class="color-dots" id="dim-colors"></div>
+      </div>
+
+      <div class="panel-section" id="dim-arch-wrap">
+        <div id="dim-arch-row">
+          <span class="panel-label">아치 높이</span>
+          <span id="dim-arch-val">20</span>
+        </div>
+        <input type="range" id="dim-arch" min="-80" max="80" value="20" step="1">
+        <span id="dim-arch-hint">음수(-): 반대 방향으로 휨</span>
+      </div>
+
+      <div class="dim-btns">
+        <button id="dim-cancel">취소</button>
+        <button id="dim-confirm" disabled>추가</button>
+      </div>
+    </div>
   </aside>
 
   <!-- 오른쪽 뷰어 -->
@@ -556,6 +667,7 @@ const UIController = {
 
         document.getElementById('btn-apply').disabled = false;
         document.getElementById('btn-download').disabled = false;
+        document.getElementById('btn-dimtool').disabled = false;
         document.getElementById('dropzone').style.borderColor = '#00a651';
       } catch (err) {
         UIController.showError('SVG를 읽을 수 없습니다: ' + err.message);
@@ -756,8 +868,278 @@ const UIController = {
   },
 };
 
+// ── DimensionTool ─────────────────────────────────────────────
+const DimensionTool = {
+  active: false,
+  points: [],       // [{x, y}, {x, y}] SVG 좌표
+  color: '#898989',
+
+  enter() {
+    DimensionTool.active = true;
+    DimensionTool.points = [];
+    document.getElementById('btn-dimtool').classList.add('active');
+    document.getElementById('btn-dimtool').textContent = '📐 치수선 모드 ON (ESC 취소)';
+    document.getElementById('dim-panel').style.display = 'flex';
+    document.getElementById('dim-confirm').disabled = true;
+    document.getElementById('dim-step-msg').textContent = '1단계: 시작점을 클릭하세요';
+
+    // 색상 도트 초기화
+    UIController._initColorDots('dim-colors', FOUNDATION.strokeColors, DimensionTool.color, c => {
+      DimensionTool.color = c;
+      DimensionTool._updatePreview();
+    });
+
+    const canvas = document.getElementById('svg-canvas');
+    canvas.classList.add('dim-mode');
+    canvas.addEventListener('click', DimensionTool._onCanvasClick);
+
+    document.addEventListener('keydown', DimensionTool._onKey);
+
+    // 슬라이더 실시간 반영
+    const slider = document.getElementById('dim-arch');
+    slider.addEventListener('input', () => {
+      document.getElementById('dim-arch-val').textContent = slider.value;
+      DimensionTool._updatePreview();
+    });
+
+    document.getElementById('dim-label').addEventListener('input', DimensionTool._updatePreview);
+    document.getElementById('dim-cancel').addEventListener('click', DimensionTool.exit);
+    document.getElementById('dim-confirm').addEventListener('click', DimensionTool._commit);
+  },
+
+  exit() {
+    DimensionTool.active = false;
+    DimensionTool.points = [];
+    document.getElementById('btn-dimtool').classList.remove('active');
+    document.getElementById('btn-dimtool').textContent = '📐 치수선 추가';
+    document.getElementById('dim-panel').style.display = 'none';
+
+    const canvas = document.getElementById('svg-canvas');
+    canvas.classList.remove('dim-mode');
+    canvas.removeEventListener('click', DimensionTool._onCanvasClick);
+    document.removeEventListener('keydown', DimensionTool._onKey);
+
+    DimensionTool._clearPreview();
+  },
+
+  _onKey(e) {
+    if (e.key === 'Escape') DimensionTool.exit();
+  },
+
+  _onCanvasClick(e) {
+    if (!AppState.svgDoc) return;
+    e.stopPropagation();
+
+    const svgEl = document.querySelector('#svg-canvas svg');
+    if (!svgEl) return;
+
+    // 마우스 → SVG 좌표 변환
+    const pt = svgEl.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgPt = pt.matrixTransform(svgEl.getScreenCTM().inverse());
+
+    DimensionTool.points.push({ x: svgPt.x, y: svgPt.y });
+    DimensionTool._drawMarker(svgEl, svgPt.x, svgPt.y, DimensionTool.points.length);
+
+    if (DimensionTool.points.length === 1) {
+      document.getElementById('dim-step-msg').textContent = '2단계: 끝점을 클릭하세요';
+    } else if (DimensionTool.points.length === 2) {
+      document.getElementById('dim-step-msg').textContent = '레이블·아치 높이를 조정 후 추가';
+      document.getElementById('dim-confirm').disabled = false;
+      DimensionTool._updatePreview();
+    } else {
+      // 3번째 클릭 시 리셋
+      DimensionTool.points = [{ x: svgPt.x, y: svgPt.y }];
+      document.getElementById('dim-step-msg').textContent = '2단계: 끝점을 클릭하세요';
+      document.getElementById('dim-confirm').disabled = true;
+      DimensionTool._clearPreview();
+      DimensionTool._drawMarker(svgEl, svgPt.x, svgPt.y, 1);
+    }
+  },
+
+  _drawMarker(svgEl, x, y, idx) {
+    // 기존 마커 제거
+    svgEl.querySelectorAll(`.dim-marker-${idx}`).forEach(el => el.remove());
+    const ns = 'http://www.w3.org/2000/svg';
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', x);
+    c.setAttribute('cy', y);
+    c.setAttribute('r', 4);
+    c.setAttribute('fill', '#1b75bc');
+    c.setAttribute('class', `dim-marker dim-marker-${idx}`);
+    c.setAttribute('pointer-events', 'none');
+    svgEl.appendChild(c);
+  },
+
+  _clearPreview() {
+    const svgEl = document.querySelector('#svg-canvas svg');
+    if (svgEl) {
+      svgEl.querySelectorAll('.dim-marker, #dim-preview-group').forEach(el => el.remove());
+    }
+  },
+
+  _updatePreview() {
+    if (DimensionTool.points.length < 2) return;
+    const svgEl = document.querySelector('#svg-canvas svg');
+    if (!svgEl) return;
+
+    const old = svgEl.querySelector('#dim-preview-group');
+    if (old) old.remove();
+
+    const label = document.getElementById('dim-label').value;
+    const offset = parseFloat(document.getElementById('dim-arch').value);
+    const p1 = DimensionTool.points[0];
+    const p2 = DimensionTool.points[1];
+
+    const g = DimensionTool._buildGroup(p1, p2, label, offset, DimensionTool.color, true);
+    g.setAttribute('id', 'dim-preview-group');
+    svgEl.appendChild(g);
+  },
+
+  _commit() {
+    if (DimensionTool.points.length < 2) return;
+    const label = document.getElementById('dim-label').value;
+    const offset = parseFloat(document.getElementById('dim-arch').value);
+    const p1 = DimensionTool.points[0];
+    const p2 = DimensionTool.points[1];
+
+    // svgDoc에 삽입
+    const ns = 'http://www.w3.org/2000/svg';
+    const g = AppState.svgDoc.createElementNS(ns, 'g');
+    g.setAttribute('class', 'dim-line');
+
+    const group = DimensionTool._buildGroup(p1, p2, label, offset, DimensionTool.color, false);
+    // innerHTML을 svgDoc 요소로 변환
+    const tmpDiv = document.createElement('div');
+    tmpDiv.innerHTML = new XMLSerializer().serializeToString(group);
+    const serialized = new XMLSerializer().serializeToString(group);
+    const parsed = new DOMParser().parseFromString(serialized, 'image/svg+xml');
+    const importedG = AppState.svgDoc.importNode(parsed.documentElement, true);
+
+    // data-sid 부여
+    let maxSid = AppState.elements.size;
+    importedG.querySelectorAll('path, text').forEach(el => {
+      const sid = 'sid-' + (maxSid++);
+      el.setAttribute('data-sid', sid);
+      const type = el.tagName.toLowerCase() === 'text' ? 'text' : 'dashed';
+      AppState.elements.set(sid, { el, type });
+    });
+
+    AppState.svgDoc.documentElement.appendChild(importedG);
+
+    DimensionTool.exit();
+    UIController.renderSVG();
+  },
+
+  // ── 베지어 수학 (DimensionLine.jsx 이식) ──────────────────────
+  _buildGroup(p1, p2, label, offset, color, isPreview) {
+    const ns = 'http://www.w3.org/2000/svg';
+
+    const p1x = p1.x, p1y = p1.y, p2x = p2.x, p2y = p2.y;
+    const dx = p2x - p1x, dy = p2y - p1y;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    if (len < 1) return document.createElementNS(ns, 'g');
+
+    // 법선 방향으로 제어점 이동 (SVG Y축 반전 고려: offset 부호 그대로)
+    const nx = -dy / len, ny = dx / len;
+    const mx = (p1x + p2x) / 2, my = (p1y + p2y) / 2;
+    const cpx = mx + nx * offset, cpy = my + ny * offset;
+
+    // 텍스트 너비 기반 gap
+    const labelLen = label.length || 0;
+    const estTextW = labelLen * 9;
+    const gapFrac = Math.min(estTextW / (len + 0.01) * 0.75, 0.38);
+    const t1 = Math.max(0.01, 0.5 - gapFrac);
+    const t2 = Math.min(0.99, 0.5 + gapFrac);
+
+    // 2차 베지어 → de Casteljau 분할
+    function bPt(t) {
+      return {
+        x: (1-t)*(1-t)*p1x + 2*(1-t)*t*cpx + t*t*p2x,
+        y: (1-t)*(1-t)*p1y + 2*(1-t)*t*cpy + t*t*p2y,
+      };
+    }
+    function lerp(a, b, t) { return { x: a.x+t*(b.x-a.x), y: a.y+t*(b.y-a.y) }; }
+
+    const P0 = { x: p1x, y: p1y };
+    const CP = { x: cpx, y: cpy };
+    const P2 = { x: p2x, y: p2y };
+
+    // Segment 1: P0 → bPt(t1)
+    const A1 = lerp(P0, CP, t1);  // rightDir of P0
+    const B1 = lerp(CP, P2, t1);
+    const C1 = lerp(A1, B1, t1);  // leftDir of end1 = bPt(t1)
+    const end1 = bPt(t1);
+
+    // Segment 2: bPt(t2) → P2
+    const A2 = lerp(P0, CP, t2);
+    const B2 = lerp(CP, P2, t2);  // leftDir of P2
+    const C2 = lerp(A2, B2, t2);  // rightDir of start2 = bPt(t2)
+    const start2 = bPt(t2);
+
+    const midPt = bPt(0.5);
+
+    function fmt(n) { return Math.round(n * 100) / 100; }
+    function pathD(sx, sy, c1x, c1y, c2x, c2y, ex, ey) {
+      return `M ${fmt(sx)},${fmt(sy)} C ${fmt(c1x)},${fmt(c1y)} ${fmt(c2x)},${fmt(c2y)} ${fmt(ex)},${fmt(ey)}`;
+    }
+
+    const g = document.createElementNS(ns, 'g');
+    g.setAttribute('class', 'dim-line-group');
+
+    function makePath(d) {
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('stroke', color);
+      path.setAttribute('stroke-width', '1');
+      path.setAttribute('stroke-dasharray', '3 2');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke-linecap', 'butt');
+      if (isPreview) path.setAttribute('opacity', '0.7');
+      return path;
+    }
+
+    // 세그먼트 1: P0 → end1
+    g.appendChild(makePath(pathD(p1x, p1y, A1.x, A1.y, C1.x, C1.y, end1.x, end1.y)));
+    // 세그먼트 2: start2 → P2
+    g.appendChild(makePath(pathD(start2.x, start2.y, C2.x, C2.y, B2.x, B2.y, p2x, p2y)));
+
+    // 텍스트
+    if (label) {
+      const text = document.createElementNS(ns, 'text');
+      text.setAttribute('x', fmt(midPt.x));
+      text.setAttribute('y', fmt(midPt.y));
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('dominant-baseline', 'middle');
+      text.setAttribute('font-family', "'Nanum Myeongjo', serif");
+      text.setAttribute('font-weight', '700');
+      text.setAttribute('font-size', '16');
+      text.setAttribute('fill', FOUNDATION.fontColor);
+      if (isPreview) text.setAttribute('opacity', '0.7');
+      text.textContent = label;
+      g.appendChild(text);
+    }
+
+    return g;
+  },
+};
+
 // ── 초기화 ────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => UIController.init());
+document.addEventListener('DOMContentLoaded', () => {
+  UIController.init();
+
+  // 치수선 버튼
+  document.getElementById('btn-dimtool').addEventListener('click', () => {
+    if (DimensionTool.active) {
+      DimensionTool.exit();
+    } else {
+      if (!AppState.svgDoc) return;
+      UIController.selectElement(null);
+      DimensionTool.enter();
+    }
+  });
+});
 </script>
 </body>
 </html>
