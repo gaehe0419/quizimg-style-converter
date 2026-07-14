@@ -386,6 +386,25 @@
           </div>
           <input type="range" id="arch-slider" min="-80" max="80" value="20" step="1" style="width:100%; accent-color:#1b75bc;">
           <span style="font-size:10px; color:#999;">음수(-): 반대 방향으로 휨</span>
+          <!-- 갭 설정 -->
+          <div class="panel-row" style="margin-top:4px;">
+            <span style="font-weight:600; font-size:11px;">텍스트 갭</span>
+            <label style="font-size:11px; display:flex; align-items:center; gap:4px; cursor:pointer;">
+              <input type="checkbox" id="gap-enable" style="cursor:pointer;"> 사용
+            </label>
+          </div>
+          <div id="gap-controls" style="display:none; flex-direction:column; gap:4px;">
+            <div class="panel-row">
+              <span>갭 위치</span>
+              <span id="gap-pos-display" style="font-size:11px; color:#555; min-width:28px; text-align:right;">50%</span>
+            </div>
+            <input type="range" id="gap-pos" min="15" max="85" value="50" step="1" style="width:100%; accent-color:#1b75bc;">
+            <div class="panel-row">
+              <span>갭 크기</span>
+              <span id="gap-size-display" style="font-size:11px; color:#555; min-width:28px; text-align:right;">10</span>
+            </div>
+            <input type="range" id="gap-size" min="3" max="25" value="10" step="1" style="width:100%; accent-color:#1b75bc;">
+          </div>
         </div>
       </div>
 
@@ -988,21 +1007,50 @@ const UIController = {
         archSection.style.display = 'flex';
         const endpoints = UIController._parsePathEndpoints(dAttr);
         const currentArch = parseFloat(dEl.getAttribute('data-arch') || '20');
+        const currentGapPos = parseFloat(dEl.getAttribute('data-gap-pos') || '50');
+        const currentGapSize = parseFloat(dEl.getAttribute('data-gap-size') || '10');
+        const currentGapEnabled = dEl.getAttribute('data-gap-enabled') === '1';
+
         const slider = document.getElementById('arch-slider');
         const archDisplay = document.getElementById('arch-val-display');
+        const gapEnable = document.getElementById('gap-enable');
+        const gapControls = document.getElementById('gap-controls');
+        const gapPosSlider = document.getElementById('gap-pos');
+        const gapPosDisplay = document.getElementById('gap-pos-display');
+        const gapSizeSlider = document.getElementById('gap-size');
+        const gapSizeDisplay = document.getElementById('gap-size-display');
+
         slider.value = currentArch;
         archDisplay.textContent = currentArch;
+        gapEnable.checked = currentGapEnabled;
+        gapControls.style.display = currentGapEnabled ? 'flex' : 'none';
+        gapPosSlider.value = currentGapPos;
+        gapPosDisplay.textContent = currentGapPos + '%';
+        gapSizeSlider.value = currentGapSize;
+        gapSizeDisplay.textContent = currentGapSize;
 
-        slider.oninput = () => {
-          archDisplay.textContent = slider.value;
+        const applyArch = () => {
           if (!endpoints) return;
           const archVal = parseFloat(slider.value);
-          const newD = UIController._regenArchPath(endpoints, archVal, dAttr);
+          const gapPos = gapEnable.checked ? parseFloat(gapPosSlider.value) / 100 : 0;
+          const gapSz = gapEnable.checked ? parseFloat(gapSizeSlider.value) / 100 : 0;
+          const newD = UIController._regenArchPath(endpoints, archVal, gapPos, gapSz);
           if (newD) {
             dEl.setAttribute('d', newD);
             dEl.setAttribute('data-arch', archVal);
+            dEl.setAttribute('data-gap-enabled', gapEnable.checked ? '1' : '0');
+            dEl.setAttribute('data-gap-pos', gapPosSlider.value);
+            dEl.setAttribute('data-gap-size', gapSizeSlider.value);
             UIController.renderSVG();
           }
+        };
+
+        slider.oninput = () => { archDisplay.textContent = slider.value; applyArch(); };
+        gapPosSlider.oninput = () => { gapPosDisplay.textContent = gapPosSlider.value + '%'; applyArch(); };
+        gapSizeSlider.oninput = () => { gapSizeDisplay.textContent = gapSizeSlider.value; applyArch(); };
+        gapEnable.onchange = () => {
+          gapControls.style.display = gapEnable.checked ? 'flex' : 'none';
+          applyArch();
         };
       } else {
         archSection.style.display = 'none';
@@ -1064,49 +1112,56 @@ const UIController = {
     } catch(e) { return null; }
   },
 
-  // 시작점·끝점 + 아치값으로 path d 재생성 (단일 곡선 세그먼트)
-  _regenArchPath(endpoints, offset, origD) {
-    const { start: p1, end: p2 } = endpoints;
-    const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  // 시작점·끝점 + 아치값 + 갭으로 path d 재생성
+  // gapCenter: 0~1 (곡선 위 갭 중심 위치), gapSize: 0~1 (갭 크기, 0이면 갭 없음)
+  _regenArchPath(endpoints, archOffset, gapCenter = 0, gapSize = 0) {
+    const { start: P0, end: P3 } = endpoints;
+    const dx = P3.x - P0.x, dy = P3.y - P0.y;
     const len = Math.sqrt(dx*dx + dy*dy);
     if (len < 1) return null;
 
+    // 2차 베지어 컨트롤포인트 (아치 방향: 수직 법선 × offset)
     const nx = -dy / len, ny = dx / len;
-    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-    const cpx = mx + nx * offset, cpy = my + ny * offset;
+    const mx = (P0.x + P3.x) / 2, my = (P0.y + P3.y) / 2;
+    const CP = { x: mx + nx * archOffset, y: my + ny * archOffset };
 
-    // origD에서 텍스트 gap 여부 판단 (gap이 있으면 절반 세그먼트로 재생성)
-    const cCount = (origD.match(/C/gi) || []).length;
+    // 2차 → 3차 베지어 변환 (rational conversion)
+    const c1 = { x: P0.x + 2/3*(CP.x-P0.x), y: P0.y + 2/3*(CP.y-P0.y) };
+    const c2 = { x: P3.x + 2/3*(CP.x-P3.x), y: P3.y + 2/3*(CP.y-P3.y) };
 
-    function fmt(n) { return Math.round(n * 100) / 100; }
-    function lerp(a, b, t) { return { x: a.x+t*(b.x-a.x), y: a.y+t*(b.y-a.y) }; }
-
-    const P0 = p1, CP = { x: cpx, y: cpy }, P2 = p2;
-
-    if (cCount === 1) {
-      // 단순 곡선: 전체를 하나의 cubic으로
-      // 2차 → cubic 변환: C1 = P0 + 2/3*(CP-P0), C2 = P2 + 2/3*(CP-P2)
-      const c1 = { x: P0.x + 2/3*(CP.x-P0.x), y: P0.y + 2/3*(CP.y-P0.y) };
-      const c2 = { x: P2.x + 2/3*(CP.x-P2.x), y: P2.y + 2/3*(CP.y-P2.y) };
-      return `M ${fmt(P0.x)},${fmt(P0.y)} C ${fmt(c1.x)},${fmt(c1.y)} ${fmt(c2.x)},${fmt(c2.y)} ${fmt(P2.x)},${fmt(P2.y)}`;
-    } else {
-      // 치수선 세그먼트 (gap 있는 경우) - 현재 path가 전체의 절반
-      // 시작점~끝점 기준으로 t 범위 추정: 절반 세그먼트는 t=0~0.45 또는 t=0.55~1
-      // 전체 시작(p1)과 현재 시작을 비교해서 어느 쪽 세그먼트인지 판단
-      const fullMid = { x: mx, y: my };
-      const distToMid = Math.sqrt((p1.x-fullMid.x)**2 + (p1.y-fullMid.y)**2);
-      const distP1toP2 = len;
-      const isFirstHalf = distToMid > distP1toP2 * 0.2;
-
-      // de Casteljau로 t1에서 분할한 왼쪽 세그먼트 재생성
-      const t1 = 0.45;
-      const A1 = lerp(P0, CP, t1);
-      const B1 = lerp(CP, P2, t1);
-      const C1 = lerp(A1, B1, t1);
-      const c1 = { x: P0.x + 2/3*(CP.x-P0.x), y: P0.y + 2/3*(CP.y-P0.y) };
-      const c2 = { x: P2.x + 2/3*(CP.x-P2.x), y: P2.y + 2/3*(CP.y-P2.y) };
-      return `M ${fmt(P0.x)},${fmt(P0.y)} C ${fmt(c1.x)},${fmt(c1.y)} ${fmt(c2.x)},${fmt(c2.y)} ${fmt(P2.x)},${fmt(P2.y)}`;
+    function fmt(n) { return Math.round(n * 1000) / 1000; }
+    function seg(s) {
+      return `M ${fmt(s.p0.x)},${fmt(s.p0.y)} C ${fmt(s.p1.x)},${fmt(s.p1.y)} ${fmt(s.p2.x)},${fmt(s.p2.y)} ${fmt(s.p3.x)},${fmt(s.p3.y)}`;
     }
+
+    if (gapSize <= 0) {
+      return `M ${fmt(P0.x)},${fmt(P0.y)} C ${fmt(c1.x)},${fmt(c1.y)} ${fmt(c2.x)},${fmt(c2.y)} ${fmt(P3.x)},${fmt(P3.y)}`;
+    }
+
+    // De Casteljau 3차 베지어 분할
+    function splitAt(p0, p1, p2, p3, t) {
+      function lerp(a, b) { return { x: a.x+t*(b.x-a.x), y: a.y+t*(b.y-a.y) }; }
+      const A = lerp(p0, p1), B = lerp(p1, p2), C = lerp(p2, p3);
+      const D = lerp(A, B), E = lerp(B, C);
+      const F = lerp(D, E);
+      return [
+        { p0, p1: A, p2: D, p3: F },   // 왼쪽 [0, t]
+        { p0: F, p1: E, p2: C, p3 },   // 오른쪽 [t, 1]
+      ];
+    }
+
+    const tc = Math.max(0.1, Math.min(0.9, gapCenter));
+    const half = Math.max(0.02, Math.min(0.25, gapSize / 2));
+    const t1 = Math.max(0.05, tc - half);
+    const t2 = Math.min(0.95, tc + half);
+
+    // t1에서 분할 → left [0,t1] + rest [t1,1]
+    const [left, rest] = splitAt(P0, c1, c2, P3, t1);
+    // rest를 재매개변수화해서 t2 위치에서 분할
+    const t2local = (t2 - t1) / (1 - t1);
+    const [, right] = splitAt(rest.p0, rest.p1, rest.p2, rest.p3, t2local);
+
+    return seg(left) + ' ' + seg(right);
   },
 
   // named color → hex 변환 (color input은 hex만 받음)
